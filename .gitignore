@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.pt
+*.pkl
+checkpoints/
+cache/
+outputs/
+unity/Library/
+unity/Temp/
+unity/Logs/
+unity/obj/
+unity/UserSettings/

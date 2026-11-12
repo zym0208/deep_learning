@@ -1,0 +1,7 @@
+# refiner + tests (CPU is enough)
+torch>=2.1
+numpy
+scipy
+pytest
+# only for tools/export_unity.py with real MANO meshes
+smplx
