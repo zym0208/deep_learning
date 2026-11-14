@@ -67,6 +67,8 @@ def hand_metrics(pose, trans, fps=30.0, gt_pose=None, gt_trans=None, valid=None)
         out["hf_energy_ratio"] = float(spec[f > 8].sum() / max(spec[f > 0].sum(), 1e-12))
     if gt_pose is not None:
         m = np.ones(T, bool) if valid is None else np.asarray(valid) > 0.5
+        if not m.any():   # hand never annotated in this clip
+            return {**out, "wrist_err_mm": np.nan, "wrist_drift_mm_per_s": np.nan, "finger_err_deg": np.nan}
         err = np.linalg.norm(trans - gt_trans, axis=-1) * 1000
         out["wrist_err_mm"] = float(err[m].mean())
         t = np.arange(T)[m] / fps

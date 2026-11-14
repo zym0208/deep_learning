@@ -169,3 +169,20 @@ def test_overfits_one_batch():
         loss.backward()
         opt.step()
     assert loss.item() < 0.3 * first, (first, loss.item())
+
+
+def test_week3_refine_global_and_loss_options():
+    model = MotionRefiner(RefinerConfig(refine_global=True)).eval()
+    m = make_batch()
+    with torch.no_grad():
+        out = model(m)
+    for h in ("right", "left"):
+        assert torch.allclose(out[f"{h}_pose"], m[f"{h}_pose"], atol=1e-4)   # zero init still = raw
+    with torch.no_grad():
+        model.head.bias.fill_(0.5)
+        out, res = model(m, return_residual=True)
+    assert res["right_drot"].shape[-2] == 16
+    assert not torch.allclose(out["right_pose"][..., :3], m["right_pose"][..., :3])
+    w = LossWeights(rec_glob=1.0, trans_axis=(1.0, 1.0, 0.25), smooth_target=True)
+    loss, parts = refiner_loss(out, make_batch(seed=3), res, w)
+    assert torch.isfinite(loss) and parts["rec_glob"] > 0

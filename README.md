@@ -22,7 +22,7 @@ MIDI / 乐谱 → 合成音频 → **冻结的预训练 S2C 扩散模型** → *
 
 ```bash
 pip install -r requirements.txt
-pytest -q                                          # 16 个测试，CPU 即可
+pytest -q                                          # 17 个测试，CPU 即可
 python tools/export_unity.py --dummy -o unity/Assets/StreamingAssets/dummy.hmotion
 ```
 
@@ -59,4 +59,5 @@ python tools/analyze_motion.py cache/<clip>_s2c.npz cache/<clip>_refined.npz --s
 - Week 1（yumin）：infer 流程梳理 ✓、接口约定 ✓、Unity 播放器 ✓（dummy 文件；真实 MANO 网格需要 MANO_RIGHT.pkl，尚未在 Unity 里实测）。
 - Week 2（yumin）：refiner、损失、梯度 / 零初始化 / 存取 / 单 batch 过拟合测试 ✓（合成数据，CPU）。
 - Week 3（yumin，不需要数据的部分）：Unity 版本切换 + 音画同步 ✓（未在 Unity 里编译实测）、抖动 / 漂移分析脚本 ✓。调损失和残差上限要等真实 S2C 预测。
+- Week 3 分析和第一次小训练（Parnia 的 28 段缓存）：见 `docs/week3_analysis.md`。结论是过拟合，需要更多数据。
 - 依赖队友：跑通 S2C 官方示例、缓存预测与标注、`train_refiner.py`。

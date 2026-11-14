@@ -7,7 +7,9 @@
            wrist position: t = t_raw + delta_t * TRANS_SCALE
         -> refined motion, same format as the input
 
-Version 1 keeps the global hand orientation (pose[:, 0:3]) unchanged.
+By default the global hand orientation (pose[:, 0:3]) is kept unchanged (version 1).
+refine_global=True (Week 3) also corrects it, R_glob = R_raw @ exp(delta): on Parnia's
+cache the global orientation is S2C's largest rotation error (17 deg vs 10.6 deg for fingers).
 Because the head starts at zero, an untrained refiner returns raw S2C exactly.
 """
 from __future__ import annotations
@@ -25,7 +27,7 @@ from .rotation import compose_axis_angle
 HANDS = ("right", "left")
 N_FINGER = FINGER_SLICE.stop - FINGER_SLICE.start  # 45
 IN_PER_HAND = POSE_DIM + TRANS_DIM                 # 51
-OUT_PER_HAND = N_FINGER + TRANS_DIM                # 48
+OUT_PER_HAND = N_FINGER + TRANS_DIM                # 48 (+3 with refine_global)
 
 
 @dataclass
@@ -36,13 +38,16 @@ class RefinerConfig:
     dropout: float = 0.1
     max_rot: float = 0.25        # rad, max correction per finger-joint axis-angle component
     max_trans: float = 0.05      # in normalised units (x TRANS_SCALE -> 7.5 cm in x/y)
+    refine_global: bool = False  # also correct the global hand orientation (pose[:, :3])
 
 
 class MotionRefiner(nn.Module):
     def __init__(self, cfg: RefinerConfig | None = None):
         super().__init__()
         self.cfg = cfg = cfg or RefinerConfig()
-        c_in, c_out = 2 * IN_PER_HAND, 2 * OUT_PER_HAND
+        self.n_rot = N_FINGER + (3 if cfg.refine_global else 0)
+        self.out_per_hand = self.n_rot + TRANS_DIM
+        c_in, c_out = 2 * IN_PER_HAND, 2 * self.out_per_hand
         k = cfg.kernel
         self.body = nn.Sequential(
             nn.Conv1d(c_in, cfg.hidden, k, padding=k // 2, padding_mode="replicate"),
@@ -67,13 +72,14 @@ class MotionRefiner(nn.Module):
         return torch.cat(parts, -1).transpose(1, 2)
 
     def predict_residual(self, m: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Bounded corrections per hand: '<h>_drot' (B,T,15,3) rad, '<h>_dtrans' (B,T,3) normalised."""
-        out = self.head(self.body(self._features(m))).transpose(1, 2)  # (B, T, 96)
-        res = {}
+        """Bounded corrections per hand: '<h>_drot' (B,T,15,3) rad (16 joints, global first, with
+        refine_global), '<h>_dtrans' (B,T,3) normalised."""
+        out = self.head(self.body(self._features(m))).transpose(1, 2)  # (B, T, 2 * out_per_hand)
+        res, n = {}, self.n_rot
         for i, h in enumerate(HANDS):
-            o = out[..., i * OUT_PER_HAND:(i + 1) * OUT_PER_HAND]
-            res[f"{h}_drot"] = (torch.tanh(o[..., :N_FINGER]) * self.cfg.max_rot).reshape(*o.shape[:2], 15, 3)
-            res[f"{h}_dtrans"] = torch.tanh(o[..., N_FINGER:]) * self.cfg.max_trans
+            o = out[..., i * self.out_per_hand:(i + 1) * self.out_per_hand]
+            res[f"{h}_drot"] = (torch.tanh(o[..., :n]) * self.cfg.max_rot).reshape(*o.shape[:2], n // 3, 3)
+            res[f"{h}_dtrans"] = torch.tanh(o[..., n:]) * self.cfg.max_trans
         return res
 
     # ------------------------------------------------------------ forward
@@ -83,9 +89,10 @@ class MotionRefiner(nn.Module):
         out = {}
         for h in HANDS:
             pose = m[f"{h}_pose"]
-            fingers = pose[..., FINGER_SLICE].reshape(*pose.shape[:2], 15, 3)
-            fingers = compose_axis_angle(fingers, res[f"{h}_drot"]).reshape(*pose.shape[:2], N_FINGER)
-            out[f"{h}_pose"] = torch.cat([pose[..., :FINGER_SLICE.start], fingers], -1)
+            start = 0 if self.cfg.refine_global else FINGER_SLICE.start
+            joints = pose[..., start:].reshape(*pose.shape[:2], -1, 3)
+            joints = compose_axis_angle(joints, res[f"{h}_drot"]).reshape(*pose.shape[:2], -1)
+            out[f"{h}_pose"] = torch.cat([pose[..., :start], joints], -1)
             out[f"{h}_trans"] = m[f"{h}_trans"] + res[f"{h}_dtrans"] * self.trans_scale
         return (out, res) if return_residual else out
 

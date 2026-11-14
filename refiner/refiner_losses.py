@@ -9,6 +9,13 @@ residual        keep corrections small so the network stays close to S2C
 
 Rotations are compared as rotation matrices (no axis-angle wrap-around
 problem). Frames whose label is missing (valid == 0) are ignored.
+
+Week 3 options, from the analysis of Parnia's cache (docs/week3_analysis.md):
+  rec_glob        global hand orientation term (only has gradient with refine_global)
+  trans_axis      per-axis weight of the wrist position terms; depth (z) of the
+                  far-away S2C camera is poorly observed and its labels are noisy
+  smooth_target   compare velocities with a Savitzky-Golay(5,2)-smoothed label, because
+                  the labels jitter more than S2C (annotation noise is not motion)
 """
 from __future__ import annotations
 
@@ -29,6 +36,22 @@ class LossWeights:
     vel_trans: float = 1.0
     res_rot: float = 0.1
     res_trans: float = 0.1
+    rec_glob: float = 0.0
+    trans_axis: tuple = (1.0, 1.0, 1.0)
+    smooth_target: bool = False
+
+
+_SG5 = (-3 / 35, 12 / 35, 17 / 35, 12 / 35, -3 / 35)   # savgol_filter(window=5, order=2) centre weights
+
+
+def _smooth_time(x: torch.Tensor) -> torch.Tensor:
+    """Savitzky-Golay(5,2) along dim 1 of (B, T, ...), edges replicated."""
+    pad = torch.cat([x[:, :1], x[:, :1], x, x[:, -1:], x[:, -1:]], 1)
+    return sum(c * pad[:, i:i + x.shape[1]] for i, c in enumerate(_SG5))
+
+
+def _glob_mat(pose: torch.Tensor) -> torch.Tensor:
+    return axis_angle_to_matrix(pose[..., :3])
 
 
 def _finger_mats(pose: torch.Tensor) -> torch.Tensor:
@@ -50,7 +73,8 @@ def refiner_loss(pred: dict, target: dict, residual: dict, w: LossWeights | None
     Returns (total_loss, dict of detached parts for logging)."""
     w = w or LossWeights()
     scale = torch.as_tensor(TRANS_SCALE, device=pred["right_trans"].device)
-    parts = {k: 0.0 for k in ("rec_rot", "rec_trans", "vel_rot", "vel_trans", "res_rot", "res_trans")}
+    axis = torch.as_tensor(w.trans_axis, device=scale.device, dtype=scale.dtype)
+    parts = {k: 0.0 for k in ("rec_rot", "rec_trans", "vel_rot", "vel_trans", "res_rot", "res_trans", "rec_glob")}
     for h in HANDS:
         mask = target.get(f"valid_{h}")
         vmask = None if mask is None else mask[:, 1:] * mask[:, :-1]
@@ -59,12 +83,15 @@ def refiner_loss(pred: dict, target: dict, residual: dict, w: LossWeights | None
         tp, tt = pred[f"{h}_trans"] / scale, target[f"{h}_trans"] / scale
 
         parts["rec_rot"] = parts["rec_rot"] + _masked_mean((rp - rt) ** 2, mask)
-        parts["rec_trans"] = parts["rec_trans"] + _masked_mean((tp - tt).abs(), mask)
+        parts["rec_trans"] = parts["rec_trans"] + _masked_mean((tp - tt).abs() * axis, mask)
+        parts["rec_glob"] = parts["rec_glob"] + _masked_mean(
+            (_glob_mat(pred[f"{h}_pose"]) - _glob_mat(target[f"{h}_pose"])) ** 2, mask)
 
-        dvp, dvt = rp[:, 1:] - rp[:, :-1], rt[:, 1:] - rt[:, :-1]
+        rv, tv = (_smooth_time(rt), _smooth_time(tt)) if w.smooth_target else (rt, tt)
+        dvp, dvt = rp[:, 1:] - rp[:, :-1], rv[:, 1:] - rv[:, :-1]
         parts["vel_rot"] = parts["vel_rot"] + _masked_mean((dvp - dvt) ** 2, vmask)
         parts["vel_trans"] = parts["vel_trans"] + _masked_mean(
-            ((tp[:, 1:] - tp[:, :-1]) - (tt[:, 1:] - tt[:, :-1])).abs(), vmask)
+            ((tp[:, 1:] - tp[:, :-1]) - (tv[:, 1:] - tv[:, :-1])).abs() * axis, vmask)
 
         parts["res_rot"] = parts["res_rot"] + (residual[f"{h}_drot"] ** 2).mean()
         parts["res_trans"] = parts["res_trans"] + (residual[f"{h}_dtrans"] ** 2).mean()

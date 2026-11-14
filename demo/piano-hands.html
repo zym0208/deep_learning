@@ -548,7 +548,10 @@ if (typeof module !== 'undefined') module.exports = { manoPrepare, manoForward, 
 
 
   // ---------------------------------------------------------------- S2C output viewer
-  // S2C works in OpenCV camera space (x right, y down, z away from a camera above the keys), metres.
+  // S2C works in OpenCV camera space (x right, y down, z away from a camera above the keys), metres,
+  // but the camera is very far (focal 37500 px, z ~ 13-27 m), so depth is barely observable and
+  // its frame-to-frame noise would make the hands bob up and down by many keys. We therefore use
+  // weak perspective: wrist x,y are scaled by zMean / z (what the image shows) and depth is fixed.
   // Scene: x right, y up, z towards the player, 1 unit = one white key (2.35 cm).
   let s2c = null, mano = null, flip = false;
   const s2cStatus = document.getElementById('s2cStatus');
@@ -578,10 +581,23 @@ if (typeof module !== 'undefined') module.exports = { manoPrepare, manoForward, 
       dst[i] = sx + off[0]; dst[i + 1] = sy + off[1]; dst[i + 2] = sz + off[2];
     }
   }
-  const tmpV = new Float32Array(778 * 3);
+  const tmpV = new Float32Array(778 * 3), ZERO3 = [0, 0, 0], wt = [0, 0, 0];
   function handVerts(h, f, out) {
     const H = s2c[h], p = H.pose.subarray(f * 48, f * 48 + 48), t = H.trans.subarray(f * 3, f * 3 + 3);
-    return manoForward(mano, p, t, out);
+    manoForward(mano, p, ZERO3, out);
+    const k = t[2] > 1e-3 ? s2c.zMean / t[2] : 1;
+    wt[0] = t[0] * k; wt[1] = t[1] * k; wt[2] = s2c.zMean;
+    for (let i = 0; i < out.length; i += 3) { out[i] += wt[0]; out[i + 1] += wt[1]; out[i + 2] += wt[2]; }
+    return out;
+  }
+  function prepS2C() {     // mean depth, and which way the camera looks (right hand should be on the right)
+    let z = 0, n = 0, xr = 0, xl = 0;
+    for (let f = 0; f < s2c.T; f++) {
+      for (const h of ['right', 'left']) { const v = s2c[h].trans[f * 3 + 2]; if (v > 1e-3) { z += v; n++; } }
+      xr += s2c.right.trans[f * 3]; xl += s2c.left.trans[f * 3];
+    }
+    s2c.zMean = n ? z / n : 0;
+    flip = xr < -xl;    // S2C mirrors the whole left hand (translation too): its real x is -left_trans.x
   }
   function placeS2C() {   // centre the clip over the played range, lowest fingertip on the keys
     const zero = [0, 0, 0], tmp = new Float32Array(mano.nV * 3);
@@ -607,7 +623,7 @@ if (typeof module !== 'undefined') module.exports = { manoPrepare, manoForward, 
   function enterS2C(motion, name) {
     if (s2c) for (const h of ['right', 'left']) scene.remove(s2c.mesh[h]);
     s2c = Object.assign(motion, { last: -1, mesh: { right: makeManoMesh(), left: makeManoMesh() } });
-    placeS2C();
+    prepS2C(); placeS2C();
     for (const h of ['R', 'L']) if (hands[h]) hands[h].root.visible = false;
     DURATION = s2c.T / s2c.fps; time = 0; sounded.clear(); lastNowKey = '';
     document.querySelector('.badge').textContent = `S2C 输出 · ${name}`;
