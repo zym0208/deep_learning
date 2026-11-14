@@ -22,7 +22,7 @@ MIDI / 乐谱 → 合成音频 → **冻结的预训练 S2C 扩散模型** → *
 
 ```bash
 pip install -r requirements.txt
-pytest -q                                          # 12 个测试，CPU 即可
+pytest -q                                          # 16 个测试，CPU 即可
 python tools/export_unity.py --dummy -o unity/Assets/StreamingAssets/dummy.hmotion
 ```
 
@@ -42,8 +42,21 @@ python tools/export_unity.py --clip cache/<clip>_s2c.npz --mano-root <...> -o un
 
 空格 播放/暂停，R 重播，←/→ 暂停时逐帧。手看起来"里外翻"时勾选 `Flip Winding`。挂一个 AudioSource 并拖到 `Audio` 字段，播放时钟就以音频为准。
 
+### Week 3：原始 / 修正版本切换和误差分析
+
+- Unity：在 `HandMotionPlayer` 的 `Variant Files` 里依次填 `raw.hmotion`、`smooth.hmotion`、`refined.hmotion`（同一段、同样帧数）。播放中按 1/2/3（或 Tab）切换版本，不打断音乐，停在同一帧。音频按采样计时（`timeSamples`），`Audio Offset` 可微调手和声音的先后。
+- 分析：
+
+```bash
+python tools/analyze_motion.py cache/<clip>_s2c.npz cache/<clip>_refined.npz --smooth \
+       --gt cache/<clip>_gt.npz --plot week3_<clip>.png
+```
+
+打印每只手的手腕抖动（jerk）、手指角加速度、8 Hz 以上能量占比、95% 手指速度（快速触键是否被抹平），有 GT 时还有手腕误差、漂移斜率（mm/s）和手指角度误差，并列出抖动最严重的帧，方便在 Unity 里逐帧看。
+
 ## 现状（2026-11-12）
 
 - Week 1（yumin）：infer 流程梳理 ✓、接口约定 ✓、Unity 播放器 ✓（dummy 文件；真实 MANO 网格需要 MANO_RIGHT.pkl，尚未在 Unity 里实测）。
 - Week 2（yumin）：refiner、损失、梯度 / 零初始化 / 存取 / 单 batch 过拟合测试 ✓（合成数据，CPU）。
+- Week 3（yumin，不需要数据的部分）：Unity 版本切换 + 音画同步 ✓（未在 Unity 里编译实测）、抖动 / 漂移分析脚本 ✓。调损失和残差上限要等真实 S2C 预测。
 - 依赖队友：跑通 S2C 官方示例、缓存预测与标注、`train_refiner.py`。

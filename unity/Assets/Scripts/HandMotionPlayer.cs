@@ -8,6 +8,11 @@
 //   3. (Optional) Add an AudioSource with the clip's audio and drag it into Audio.
 //   4. Press Play. Space = play/pause, R = restart, Left/Right = step one frame while paused.
 //
+// Week 3, version switching: fill Variant Files with e.g. raw.hmotion, smooth.hmotion,
+// refined.hmotion (same clip, same frame count, from tools/export_unity.py). Keys 1/2/3
+// (or Tab to cycle) switch version on the same frame without restarting audio, so raw and
+// refined can be compared side by side in time. Variant Files overrides File Name.
+//
 // Works with both the legacy Input Manager and the new Input System package.
 using System;
 using System.IO;
@@ -20,6 +25,10 @@ public class HandMotionPlayer : MonoBehaviour
 {
     [Tooltip("File inside Assets/StreamingAssets, e.g. dummy.hmotion")]
     public string fileName = "dummy.hmotion";
+    [Tooltip("Optional: several versions of the same clip (raw / smoothed / refined). Overrides File Name.")]
+    public string[] variantFiles = new string[0];
+    [Tooltip("Seconds added to the audio time before picking a frame; positive = hands earlier.")]
+    public float audioOffset = 0f;
     public AudioSource audioSource;
     public Material handMaterial;
     public bool playOnStart = true;
@@ -35,13 +44,19 @@ public class HandMotionPlayer : MonoBehaviour
     public int CurrentFrame { get; private set; }
     public bool IsPlaying { get; private set; }
 
+    public int Variant { get; private set; }
+    public string VariantName => _names.Length > 0 ? _names[Variant] : fileName;
+
     Mesh _right, _left;
     Vector3[][] _framesR, _framesL;
+    Vector3[][][] _varR, _varL;
+    string[] _names = new string[0];
     float _clock;   // seconds, used when there is no audio
 
     void Start()
     {
-        Load(Path.Combine(Application.streamingAssetsPath, fileName));
+        if (variantFiles != null && variantFiles.Length > 0) LoadVariants(variantFiles);
+        else Load(Path.Combine(Application.streamingAssetsPath, fileName));
         if (autoCamera && Camera.main != null)
         {
             Camera.main.transform.position = transform.position + new Vector3(0, 0, -cameraDistance);
@@ -52,7 +67,41 @@ public class HandMotionPlayer : MonoBehaviour
         if (playOnStart) Play();
     }
 
-    public void Load(string path)
+    // Load several versions of one clip; the meshes are built from the first, the others only
+    // supply vertex positions, so all must share vertex counts. Frame count = shortest file.
+    public void LoadVariants(string[] files)
+    {
+        _names = files;
+        _varR = new Vector3[files.Length][][];
+        _varL = new Vector3[files.Length][][];
+        int frames = int.MaxValue, nR = -1, nL = -1;
+        float fps = 0;
+        for (int i = 0; i < files.Length; i++)
+        {
+            Load(Path.Combine(Application.streamingAssetsPath, files[i]), i == 0);
+            if (i == 0) { nR = _framesR[0].Length; nL = _framesL[0].Length; fps = Fps; }
+            else if (_framesR[0].Length != nR || _framesL[0].Length != nL)
+                throw new InvalidDataException($"{files[i]}: vertex count differs from {files[0]}");
+            else if (Mathf.Abs(Fps - fps) > 1e-3f)
+                Debug.LogWarning($"[HandMotionPlayer] {files[i]} is {Fps} fps, {files[0]} is {fps} fps; using {fps}");
+            _varR[i] = _framesR; _varL[i] = _framesL;
+            frames = Mathf.Min(frames, FrameCount);
+        }
+        Fps = fps; FrameCount = frames;
+        SetVariant(0);
+    }
+
+    public void SetVariant(int i)
+    {
+        if (_varR == null || i < 0 || i >= _varR.Length) return;
+        Variant = i;
+        _framesR = _varR[i]; _framesL = _varL[i];
+        if (_right != null) ShowFrame(CurrentFrame);
+    }
+
+    public void Load(string path) => Load(path, true);
+
+    void Load(string path, bool buildMeshes)
     {
         using (var br = new BinaryReader(File.OpenRead(path)))
         {
@@ -72,10 +121,13 @@ public class HandMotionPlayer : MonoBehaviour
                 _framesR[f] = ReadVerts(br, nVertR);
                 _framesL[f] = ReadVerts(br, nVertL);
             }
-            _right = MakeHand("RightHand", _framesR[0], trisR);
-            _left = MakeHand("LeftHand", _framesL[0], trisL);
+            if (buildMeshes)
+            {
+                _right = MakeHand("RightHand", _framesR[0], trisR);
+                _left = MakeHand("LeftHand", _framesL[0], trisL);
+            }
         }
-        Debug.Log($"[HandMotionPlayer] loaded {fileName}: {FrameCount} frames @ {Fps} fps");
+        Debug.Log($"[HandMotionPlayer] loaded {Path.GetFileName(path)}: {FrameCount} frames @ {Fps} fps");
     }
 
     static int[] ReadInts(BinaryReader br, int n)
@@ -122,10 +174,10 @@ public class HandMotionPlayer : MonoBehaviour
     public void Play()
     {
         IsPlaying = true;
-        if (audioSource != null && audioSource.clip != null)
+        if (audioSource != null && audioSource.clip != null && _clock < audioSource.clip.length)
         {
-            // Play() would restart from 0; UnPause() continues from audioSource.time
-            if (audioSource.time > 0f) audioSource.UnPause(); else audioSource.Play();
+            audioSource.time = Mathf.Max(0f, _clock);   // resume where the hands are
+            audioSource.Play();
         }
     }
 
@@ -143,16 +195,20 @@ public class HandMotionPlayer : MonoBehaviour
         Play();
     }
 
-    float CurrentTime =>
-        audioSource != null && audioSource.clip != null ? audioSource.time : _clock;
+    // Audio is the master clock while it plays. timeSamples is sample-exact (audioSource.time is
+    // updated in coarse steps on some platforms, which makes the hands stutter against the sound).
+    // If the audio ends before the motion, the internal clock carries on from where audio stopped.
+    bool AudioRunning => audioSource != null && audioSource.clip != null && audioSource.isPlaying;
+    float CurrentTime => _clock + audioOffset;
 
     void Update()
     {
         HandleKeys();
         if (!IsPlaying || FrameCount == 0) return;
 
-        _clock += Time.deltaTime;
-        int frame = Mathf.FloorToInt(CurrentTime * Fps);
+        if (AudioRunning) _clock = (float)audioSource.timeSamples / audioSource.clip.frequency;
+        else _clock += Time.deltaTime;
+        int frame = Mathf.FloorToInt(Mathf.Max(0f, CurrentTime) * Fps);
         if (frame >= FrameCount)
         {
             if (loop) { Restart(); return; }
@@ -189,20 +245,31 @@ public class HandMotionPlayer : MonoBehaviour
         if (kb == null) return;
         bool space = kb.spaceKey.wasPressedThisFrame, r = kb.rKey.wasPressedThisFrame;
         bool left = kb.leftArrowKey.wasPressedThisFrame, right = kb.rightArrowKey.wasPressedThisFrame;
+        bool tab = kb.tabKey.wasPressedThisFrame;
+        int num = kb.digit1Key.wasPressedThisFrame ? 0 : kb.digit2Key.wasPressedThisFrame ? 1
+                : kb.digit3Key.wasPressedThisFrame ? 2 : kb.digit4Key.wasPressedThisFrame ? 3 : -1;
 #else
         bool space = Input.GetKeyDown(KeyCode.Space), r = Input.GetKeyDown(KeyCode.R);
         bool left = Input.GetKeyDown(KeyCode.LeftArrow), right = Input.GetKeyDown(KeyCode.RightArrow);
+        bool tab = Input.GetKeyDown(KeyCode.Tab);
+        int num = Input.GetKeyDown(KeyCode.Alpha1) ? 0 : Input.GetKeyDown(KeyCode.Alpha2) ? 1
+                : Input.GetKeyDown(KeyCode.Alpha3) ? 2 : Input.GetKeyDown(KeyCode.Alpha4) ? 3 : -1;
 #endif
         if (space) { if (IsPlaying) Pause(); else Play(); }
         if (r) Restart();
         if (left) Step(-1);
         if (right) Step(1);
+        if (num >= 0) SetVariant(num);
+        if (tab && _names.Length > 1) SetVariant((Variant + 1) % _names.Length);
     }
 
     void OnGUI()
     {
         GUI.Label(new Rect(10, 10, 600, 20),
-            $"{fileName}  frame {CurrentFrame + 1}/{FrameCount}  t={CurrentFrame / Mathf.Max(Fps, 1):F2}s  " +
-            (IsPlaying ? "playing" : "paused") + "   [Space] play/pause  [R] restart  [←/→] step");
+            $"{VariantName}  frame {CurrentFrame + 1}/{FrameCount}  t={CurrentFrame / Mathf.Max(Fps, 1):F2}s  " +
+            (IsPlaying ? "playing" : "paused") + "   [Space] play/pause  [R] restart  [←/→] step" +
+            (_names.Length > 1 ? "  [1-" + _names.Length + "/Tab] version" : ""));
+        if (_names.Length > 1)
+            GUI.Label(new Rect(10, 30, 600, 24), $"<size=18><b>Version {Variant + 1}: {VariantName}</b></size>");
     }
 }
