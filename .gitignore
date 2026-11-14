@@ -11,3 +11,7 @@ unity/Temp/
 unity/Logs/
 unity/obj/
 unity/UserSettings/
+
+# MANO-derived files (research licence, never commit)
+mano_right.json
+*.pkl
