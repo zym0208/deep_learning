@@ -674,6 +674,26 @@ if (typeof module !== 'undefined') module.exports = { manoPrepare, manoForward, 
   document.getElementById('flipView').addEventListener('click', () => { flip = !flip; if (s2c) { placeS2C(); s2c.last = -1; } });
   document.getElementById('backDemo').addEventListener('click', exitS2C);
   document.getElementById('showKeys').addEventListener('change', e => { keyboard.visible = body.visible = felt.visible = e.target.checked; });
+  // Auto-load from the URL when the page is served over http (e.g. python -m http.server):
+  //   piano-hands.html?mano=/mano/mano_right.json&npz=/s2c/cache/<clip>_s2c.npz[&audio=...]
+  (async () => {
+    const q = new URLSearchParams(location.search);
+    if (!q.get('mano') && !q.get('npz')) return;
+    try {
+      if (q.get('mano')) {
+        setStatus('读取 MANO 模型… · reading MANO model…');
+        const r = await fetch(q.get('mano')); if (!r.ok) throw new Error(`${q.get('mano')}: HTTP ${r.status}`);
+        mano = manoPrepare(await r.json());
+      }
+      if (q.get('audio')) { audioEl.src = q.get('audio'); }
+      if (q.get('npz')) {
+        setStatus('读取动作… · reading motion…');
+        const r = await fetch(q.get('npz')); if (!r.ok) throw new Error(`${q.get('npz')}: HTTP ${r.status}`);
+        pendingNpz = { motion: pickHands(await readNpz(await r.arrayBuffer())), name: q.get('npz').split('/').pop() };
+      }
+      await tryStart();
+    } catch (err) { setStatus(`自动加载失败 · auto-load failed: ${err.message}`, 'err'); }
+  })();
 
   function applyTheme() {
     scene.background = new THREE.Color(css('--stage'));
