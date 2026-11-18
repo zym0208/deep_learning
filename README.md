@@ -61,3 +61,10 @@ python tools/analyze_motion.py cache/<clip>_s2c.npz cache/<clip>_refined.npz --s
 - Week 3（yumin，不需要数据的部分）：Unity 版本切换 + 音画同步 ✓（未在 Unity 里编译实测）、抖动 / 漂移分析脚本 ✓。调损失和残差上限要等真实 S2C 预测。
 - Week 3 分析和第一次小训练（Parnia 的 28 段缓存）：见 `docs/week3_analysis.md`。结论是过拟合，需要更多数据。
 - 依赖队友：跑通 S2C 官方示例、缓存预测与标注、`train_refiner.py`。
+
+## S2C 原始模型源码
+
+官方源码现已纳入 [`third_party/S2C`](third_party/S2C)，包含位置预测与双流扩散训练入口、推理入口、U-Net 和 HCAA。
+源码以普通文件随主仓库管理，不需要额外初始化子模块。官方版本记录在
+[`UPSTREAM.json`](third_party/S2C/UPSTREAM.json)，目录用法见
+[`INTEGRATION.md`](third_party/S2C/INTEGRATION.md)。本次仅导入源码，未下载权重、数据或启动训练。
