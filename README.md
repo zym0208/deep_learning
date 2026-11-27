@@ -62,6 +62,10 @@ python tools/analyze_motion.py cache/<clip>_s2c.npz cache/<clip>_refined.npz --s
 - Week 3 分析和第一次小训练（Parnia 的 28 段缓存）：见 `docs/week3_analysis.md`。结论是过拟合，需要更多数据。
 - 依赖队友：跑通 S2C 官方示例、缓存预测与标注、`train_refiner.py`。
 
+### 按键（MIDI）和误差参考值
+
+`unity/Assets/Scripts/MidiKeyboard.cs`：按片段的 MIDI 高亮琴键，键盘位置从起音时刻的指尖拟合；橙 = 右手、蓝 = 左手、红 = 没有手指在这个键上。`refiner/keypress.py` + `tools/keypress_eval.py`：同样方法的按键命中率指标。和论文数字怎么比见 [`docs/keypress_and_error_refs.md`](docs/keypress_and_error_refs.md)。
+
 ## S2C 原始模型源码
 
 官方源码现已纳入 [`third_party/S2C`](third_party/S2C)，包含位置预测与双流扩散训练入口、推理入口、U-Net 和 HCAA。

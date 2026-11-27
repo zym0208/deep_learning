@@ -46,6 +46,17 @@ public class HandMotionPlayer : MonoBehaviour
 
     public int Variant { get; private set; }
     public string VariantName => _names.Length > 0 ? _names[Variant] : fileName;
+    public int VariantCount => _varR != null ? _varR.Length : 1;
+    public string GetVariantName(int i) => _names.Length > 0 ? _names[i] : fileName;
+
+    // Vertices of one hand at a frame, in this object's local space (read-only, do not modify).
+    // variant -1 = the version on screen. Used by MidiKeyboard to find the fingertips.
+    public Vector3[] GetVertices(bool right, int frame, int variant = -1)
+    {
+        var frames = right ? _framesR : _framesL;
+        if (variant >= 0 && _varR != null && variant < _varR.Length) frames = right ? _varR[variant] : _varL[variant];
+        return frames == null ? null : frames[Mathf.Clamp(frame, 0, FrameCount - 1)];
+    }
 
     Mesh _right, _left;
     Vector3[][] _framesR, _framesL;
